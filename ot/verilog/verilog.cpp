@@ -75,8 +75,8 @@ Module read_verilog(const std::filesystem::path& path) {
 
   Module module;
   
-  static std::string_view delimiters = "(),:;/#[]{}*\"\\";
-  static std::string_view exceptions = "().";
+  static std::string_view delimiters = "(),:;#[]{}*\"\\";
+  static std::string_view exceptions = "().[];";
   
   auto tokens = tokenize(path, delimiters, exceptions);
 
@@ -102,7 +102,23 @@ Module read_verilog(const std::filesystem::path& path) {
     [&] (auto& str) mutable { module.ports.push_back(std::move(str)); }); itr == end) {
     OT_LOGF("syntax error in module ports");
   }
-  
+
+  // lambda for bus notation processing
+  auto bus_lambda = [] (auto& itr, auto& v) {
+    // "[w:0] net" is tokenized to { "[", "w", "0", "]", "net" }
+    ++itr;
+    int width = std::stoi(*itr) + 1;
+    std::advance(itr, 3); // advance to net
+    do {
+      for(auto i=0; i<width; ++i) {
+        std::stringstream ss;
+        ss << *itr << "[" << i << "]";
+        v.push_back(std::move(ss.str()));
+      }
+      ++itr;
+    } while (*itr != ";");
+  };
+
   // Parse the content.
   while(++itr != end) {
     
@@ -110,23 +126,50 @@ Module read_verilog(const std::filesystem::path& path) {
       if(++itr == end) {
         OT_LOGF("syntax error in input");
       }
-      module.inputs.push_back(std::move(*itr));
+      if (*itr == "[") {
+        bus_lambda(itr, module.inputs);
+      }
+      else {
+        do {
+          module.inputs.push_back(std::move(*itr));
+          ++itr;
+        } while (*itr != ";");
+      }
     }
     else if(*itr == "output") {
       if(++itr == end) {
         OT_LOGF("syntax error in output");
       }
-      module.outputs.push_back(std::move(*itr));
+      if (*itr == "[") {
+        bus_lambda(itr, module.outputs);
+      }
+      else {
+        do {
+          module.outputs.push_back(std::move(*itr));
+          ++itr;
+        } while (*itr != ";");
+      }
     }
     else if(*itr == "wire") {
       if(++itr == end) {
         OT_LOGF("syntax error in wire");
       }
-      module.wires.push_back(std::move(*itr));
+      if (*itr == "[") {
+        bus_lambda(itr, module.wires);
+      }
+      else {
+        do {
+          module.wires.push_back(std::move(*itr));
+          ++itr;
+        } while (*itr != ";");
+      }
     }
     else if(*itr == "endmodule") {
       break;
     }
+    else if(*itr == ";") {
+      continue;
+    }    
     else {
       
       Gate inst;
@@ -142,16 +185,19 @@ Module read_verilog(const std::filesystem::path& path) {
       std::string net;
 
       itr = on_next_parentheses(itr, end, [&] (auto& str) mutable { 
-        if(str == ")" || str == "(") {
+        if(str == "(") {
           return;
         }
         else if(str[0] == '.') {
           cellpin = str.substr(1);
         }
-        else {
-          net = str; 
+        else if(str == ")") {
           inst.cellpin2net[cellpin] = net;
           inst.net2cellpin[net] = cellpin;
+          net.clear();
+        }
+        else {
+          net += str;
         }
       });
 
