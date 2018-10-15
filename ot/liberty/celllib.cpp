@@ -426,6 +426,11 @@ Timing Celllib::_extract_timing(token_iterator& itr, const token_iterator end) {
     OT_LOGF("can't find group brace '}' in timing");
   }
 
+  /* Hack for duplicate timing in vendor's cell library */
+  if (timing.type == std::nullopt) {
+    timing.type = TimingType::COMBINATIONAL;
+  }    
+
   return timing;
 }
 
@@ -514,7 +519,20 @@ Cellpin Celllib::_extract_cellpin(token_iterator& itr, const token_iterator end)
       cellpin.original_pin = *itr;
     }
     else if(*itr == "timing") {
-      cellpin.timings.push_back(_extract_timing(itr, end));
+      /* Hack for duplicate timing in vendor's cell library */
+      auto tmp_t = _extract_timing(itr, end);
+      bool unique_timing = true;
+      for(auto t : cellpin.timings) {
+        if(tmp_t.related_pin == t.related_pin && 
+           tmp_t.sense == t.sense &&
+           tmp_t.type == t.type) {
+           unique_timing = false;
+           break;    
+        }    
+      }    
+      if(unique_timing) {
+        cellpin.timings.push_back(tmp_t);
+      }  
     }
     else if(*itr == "}") {
       stack--;
@@ -640,6 +658,15 @@ void Celllib::read(const std::filesystem::path& path) {
     if(*itr == "lu_table_template") {
       auto lut = _extract_lut_template(itr, end);
       lut_templates[lut.name] = lut;
+    }
+    else if(*itr == "define") { // consume define statements
+        std::string junk; 
+        if(itr = on_next_parentheses( 
+          itr, 
+          end, 
+          [&] (auto& str2) mutable {junk = str2; }); itr == end) { 
+            OT_LOGF("Define extraction failed."); 
+        } 
     }
     else if(*itr == "delay_model") {
       OT_LOGF_IF(++itr == end, "syntax error in delay_model");
